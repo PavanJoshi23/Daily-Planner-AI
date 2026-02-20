@@ -5,10 +5,16 @@ import re
 from pathlib import Path
 from typing import Any
 
+from langchain.agents import create_agent
+from langchain.tools import tool
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_openai import AzureChatOpenAI
+
 from a2a_types import (
     AgentCard, AgentCapabilities, AgentSkill,
     Artifact, DataPart, Message, Task, TaskState, TaskStatus, TextPart,
 )
+from config import Config
 from server_base import A2AServerBase
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -18,6 +24,10 @@ PRIORITY_LEVELS = {"low", "medium", "high", "critical"}
 RELATIVE_DUE = {"today": "TODAY", "tomorrow": "TOMORROW", "eod": "EOD"}
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _load() -> list[dict[str, Any]]:
     return json.loads(TASKS_FILE.read_text(encoding="utf-8"))
 
@@ -25,6 +35,126 @@ def _load() -> list[dict[str, Any]]:
 def _save(tasks: list[dict[str, Any]]) -> None:
     TASKS_FILE.write_text(json.dumps(tasks, indent=2, ensure_ascii=False), encoding="utf-8")
 
+
+# ---------------------------------------------------------------------------
+# Tools (LLM-callable)
+# ---------------------------------------------------------------------------
+
+@tool
+def get_tasks() -> str:
+    """
+    Fetch the full to-do list.
+    Returns JSON with a 'tasks' list containing all tasks and their details.
+    """
+    tasks = _load()
+    return json.dumps({"tasks": tasks}, ensure_ascii=False)
+
+
+@tool
+def update_task_priority(task_id: str, priority: str) -> str:
+    """
+    Change the priority of a task.
+    Args:
+        task_id:  The task's id (e.g. 'T001').
+        priority: One of: low, medium, high, critical.
+    Returns JSON confirming the priority change, or an error message.
+    """
+    priority = priority.lower().strip()
+    if priority not in PRIORITY_LEVELS:
+        return json.dumps({"error": f"Invalid priority '{priority}'. Must be one of: {sorted(PRIORITY_LEVELS)}."})
+
+    tasks = _load()
+    for t in tasks:
+        if str(t.get("id", "")).upper() == task_id.upper():
+            old_priority = t.get("priority", "unset")
+            t["priority"] = priority
+            _save(tasks)
+            return json.dumps({
+                "task_id": task_id,
+                "old_priority": old_priority,
+                "new_priority": priority,
+                "task": t,
+            }, ensure_ascii=False)
+    return json.dumps({"error": f"Task {task_id} not found."})
+
+
+@tool
+def update_task_due_date(task_id: str, due: str) -> str:
+    """
+    Change the due date of a task.
+    Args:
+        task_id: The task's id (e.g. 'T001').
+        due: One of TODAY / TOMORROW / EOD, or an absolute date YYYY-MM-DD.
+    Returns JSON confirming the due-date change, or an error message.
+    """
+    due = due.strip().upper()
+    # Normalise relative keywords
+    if due == "TODAY" or due == "TOMORROW" or due == "EOD":
+        pass  # already normalised
+    elif re.match(r"\d{4}-\d{2}-\d{2}", due):
+        pass  # absolute date — keep as-is
+    else:
+        return json.dumps({"error": f"Unrecognised due value '{due}'. Use TODAY/TOMORROW/EOD or YYYY-MM-DD."})
+
+    tasks = _load()
+    for t in tasks:
+        if str(t.get("id", "")).upper() == task_id.upper():
+            old_due = t.get("due")
+            t["due"] = due
+            _save(tasks)
+            return json.dumps({
+                "task_id": task_id,
+                "old_due": old_due,
+                "new_due": due,
+                "task": t,
+            }, ensure_ascii=False)
+    return json.dumps({"error": f"Task {task_id} not found."})
+
+
+# ---------------------------------------------------------------------------
+# LLM factory
+# ---------------------------------------------------------------------------
+
+def _build_llm() -> AzureChatOpenAI:
+    Config.validate_azure()
+    return AzureChatOpenAI(
+        azure_deployment=Config.INFERENCE_MODEL,
+        openai_api_version=Config.OPENAI_API_VERSION,
+        azure_endpoint=Config.OPENAI_API_URL,
+        api_key=Config.OPENAI_API_KEY,
+        temperature=1,
+    )
+
+
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT = """\
+You are TasksAgent, a focused assistant that manages a local to-do list.
+
+AVAILABLE TOOLS:
+- get_tasks(): Fetch all tasks with their id, title, priority, due date, and estimate.
+- update_task_priority(task_id, priority): Change a task's priority. \
+  Valid priorities: low, medium, high, critical.
+- update_task_due_date(task_id, due): Change a task's due date. \
+  Accepts TODAY, TOMORROW, EOD, or YYYY-MM-DD.
+
+RULES:
+- Always use a tool to answer — never guess from memory.
+- For listing/reading tasks, call get_tasks.
+- For priority-change requests (set priority, mark urgent, escalate, bump), call update_task_priority.
+- For due-date/deadline changes, call update_task_due_date.
+- Return only factual, concise results. No extra commentary or suggestions.
+- After calling a tool, summarise the result in 1–3 lines.
+"""
+
+_TOOLS = [get_tasks, update_task_priority, update_task_due_date]
+
+
+# ---------------------------------------------------------------------------
+# Agent Server
+# ---------------------------------------------------------------------------
 
 class TasksAgentServer(A2AServerBase):
     PORT = 8002
@@ -59,158 +189,31 @@ class TasksAgentServer(A2AServerBase):
     )
 
     def handle_task(self, task: Task, user_message: Message) -> Task:
-        text = " ".join(p.text for p in user_message.parts if isinstance(p, TextPart)).lower()
+        # Extract plain text from the incoming A2A message
+        user_text = " ".join(
+            p.text for p in user_message.parts if isinstance(p, TextPart)
+        ).strip()
 
-        # Route due-date updates first, because common phrasing ("set task ...") overlaps
-        # with priority update intents.
-        if any(w in text for w in ("due", "deadline", "date")) or re.search(r"\b\d{4}-\d{2}-\d{2}\b", text):
-            return self._handle_update_due(task, text)
-        if any(w in text for w in ("priority", "mark", "escalate", "urgent", "bump")):
-            return self._handle_update_priority(task, text)
-        return self._handle_get(task)
+        # Build & invoke the LLM agent
+        llm = _build_llm()
+        agent = create_agent(llm, tools=_TOOLS, system_prompt=_SYSTEM_PROMPT, name="tasks_agent")
 
-    # ------------------------------------------------------------------
+        result = agent.invoke({"messages": [HumanMessage(content=user_text)]})
+        messages = result.get("messages", [])
+        last = messages[-1] if messages else None
+        answer = (last.content if isinstance(last, AIMessage) else str(getattr(last, "content", last))) if last else "No response from TasksAgent."
 
-    def _handle_get(self, task: Task) -> Task:
-        tasks = _load()
-        task.artifacts = [Artifact(name="task_list", parts=[DataPart(data={"tasks": tasks})])]
+        # Pack result into A2A task
+        task.artifacts = [
+            Artifact(
+                name="tasks_result",
+                parts=[DataPart(data={"answer": answer})],
+            )
+        ]
         task.status = TaskStatus(
             state=TaskState.COMPLETED,
-            message=Message.agent_text(f"Retrieved {len(tasks)} task(s)."),
+            message=Message.agent_text(answer),
         )
-        return task
-
-    def _handle_update_priority(self, task: Task, text: str) -> Task:
-        """
-        Expects: task_id (e.g. T001) and a priority level word.
-        Example: "set task T001 to high priority"
-        """
-        tasks = _load()
-
-        # Find task id  (letter + digits, e.g. T001)
-        tid_match = re.search(r"\b([a-z]\d{3,})\b", text, re.IGNORECASE)
-        task_id = tid_match.group(1).upper() if tid_match else None
-
-        # Find priority level
-        priority = next((p for p in PRIORITY_LEVELS if p in text), None)
-
-        if not task_id or not priority:
-            task.status = TaskStatus(
-                state=TaskState.FAILED,
-                message=Message.agent_text(
-                    f"Could not parse priority update. Provide task_id and priority level "
-                    f"(low/medium/high/critical). Got id={task_id}, priority={priority}."
-                ),
-            )
-            return task
-
-        updated = False
-        for t in tasks:
-            if str(t.get("id", "")).upper() == task_id:
-                old_priority = t.get("priority", "unset")
-                t["priority"] = priority
-                updated = True
-                _save(tasks)
-                task.artifacts = [
-                    Artifact(
-                        name="updated_task",
-                        parts=[DataPart(data={
-                            "task_id": task_id,
-                            "old_priority": old_priority,
-                            "new_priority": priority,
-                            "task": t,
-                        })],
-                    )
-                ]
-                task.status = TaskStatus(
-                    state=TaskState.COMPLETED,
-                    message=Message.agent_text(
-                        f"Task {task_id} priority changed from '{old_priority}' to '{priority}'."
-                    ),
-                )
-                break
-
-        if not updated:
-            task.status = TaskStatus(
-                state=TaskState.FAILED,
-                message=Message.agent_text(f"Task {task_id} not found."),
-            )
-        return task
-
-    def _handle_update_due(self, task: Task, text: str) -> Task:
-        """
-        Update the due date for a task.
-        Accepts:
-          - Relative: today/tomorrow/eod (case-insensitive)
-          - Absolute: YYYY-MM-DD
-        Example:
-          "Change task T004 due to tomorrow"
-          "Set task T009 due to 2026-02-20"
-        """
-        tasks = _load()
-
-        tid_match = re.search(r"\b([a-z]\d{3,})\b", text, re.IGNORECASE)
-        task_id = tid_match.group(1).upper() if tid_match else None
-
-        # Absolute date wins if present
-        date_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
-        if date_match:
-            due = date_match.group(1)
-        else:
-            # Normalize common relative forms
-            if "end of day" in text or "eod" in text:
-                due = "EOD"
-            elif "tomorrow" in text:
-                due = "TOMORROW"
-            elif "today" in text:
-                due = "TODAY"
-            else:
-                # Allow explicit tokens like "due to TODAY"
-                tok = next((k for k in RELATIVE_DUE.keys() if k in text), None)
-                due = RELATIVE_DUE.get(tok) if tok else None
-
-        if not task_id or not due:
-            task.status = TaskStatus(
-                state=TaskState.FAILED,
-                message=Message.agent_text(
-                    "Could not parse due date update. Provide a task id and a due date "
-                    "(TODAY/TOMORROW/EOD or YYYY-MM-DD). "
-                    f"Got id={task_id}, due={due}."
-                ),
-            )
-            return task
-
-        updated = False
-        for t in tasks:
-            if str(t.get("id", "")).upper() == task_id:
-                old_due = t.get("due")
-                t["due"] = due
-                updated = True
-                _save(tasks)
-                task.artifacts = [
-                    Artifact(
-                        name="updated_task_due",
-                        parts=[DataPart(data={
-                            "task_id": task_id,
-                            "old_due": old_due,
-                            "new_due": due,
-                            "task": t,
-                        })],
-                    )
-                ]
-                task.status = TaskStatus(
-                    state=TaskState.COMPLETED,
-                    message=Message.agent_text(
-                        f"Task {task_id} due date changed from '{old_due}' to '{due}'."
-                    ),
-                )
-                break
-
-        if not updated:
-            task.status = TaskStatus(
-                state=TaskState.FAILED,
-                message=Message.agent_text(f"Task {task_id} not found."),
-            )
         return task
 
 

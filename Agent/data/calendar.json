@@ -10,8 +10,8 @@
   {
     "id": "E002",
     "date": "TODAY",
-    "start": "15:00",
-    "end": "16:00",
+    "start": "11:00",
+    "end": "12:00",
     "title": "Sprint Planning",
     "fixed": true
   },
@@ -42,8 +42,8 @@
   {
     "id": "E006",
     "date": "TODAY",
-    "start": "16:00",
-    "end": "16:30",
+    "start": "15:00",
+    "end": "15:30",
     "title": "Client Demo — Q3 Features",
     "fixed": true
   },
