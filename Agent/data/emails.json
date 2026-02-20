@@ -1,0 +1,58 @@
+[
+  {
+    "id": "M001",
+    "from": "manager@company.com",
+    "subject": "Status report needed EOD",
+    "body": "Hey, can you send the weekly status report by EOD today? Leadership wants it before the 5pm review. Urgent!",
+    "task_id": "T001"
+  },
+  {
+    "id": "M002",
+    "from": "teammate@company.com",
+    "subject": "PR #482 ready for review",
+    "body": "Hi, the auth middleware PR is up. Please try to review it today — it's blocking the release branch.",
+    "task_id": "T002"
+  },
+  {
+    "id": "M003",
+    "from": "oncall@company.com",
+    "subject": "URGENT: Login timeout spike on mobile — prod affected",
+    "body": "We're seeing a 40% increase in login timeouts on iOS/Android since 08:00. Needs investigation ASAP. Tagging you as the owner.",
+    "task_id": "T003"
+  },
+  {
+    "id": "M004",
+    "from": "devops@company.com",
+    "subject": "Staging upgrade reminder",
+    "body": "Friendly reminder to bump staging to Node 20 before end of week. No rush, just don't want it to slip.",
+    "task_id": "T006"
+  },
+  {
+    "id": "M005",
+    "from": "hr@company.com",
+    "subject": "Onboarding doc review — Priya starts tomorrow",
+    "body": "Priya joins tomorrow morning. Could you review and sign off on her onboarding doc today if possible?",
+    "task_id": "T008"
+  },
+  {
+    "id": "M006",
+    "from": "qa@company.com",
+    "subject": "Payment module tests missing — release at risk",
+    "body": "QA flagged that the payment module has no unit tests. We need these asap before the release gate on Thursday.",
+    "task_id": "T009"
+  },
+  {
+    "id": "M007",
+    "from": "newsletter@devdigest.io",
+    "subject": "This week in backend engineering",
+    "body": "Top stories: Rust adoption in production, PostgreSQL 17 benchmarks, and more.",
+    "task_id": null
+  },
+  {
+    "id": "M008",
+    "from": "cto@company.com",
+    "subject": "Sprint goals — quick check-in",
+    "body": "Just want to make sure we're aligned on the sprint priorities. Let's sync during your planning session today.",
+    "task_id": "T004"
+  }
+]

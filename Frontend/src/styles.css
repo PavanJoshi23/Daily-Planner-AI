@@ -1,0 +1,401 @@
+:root {
+  color-scheme: light;
+  --bg: #f7f7f8;
+  --bg2: #ffffff;
+  --panel: #ffffff;
+  --panel2: #ffffff;
+  --border: rgba(17, 24, 39, 0.10);
+  --border2: rgba(17, 24, 39, 0.16);
+  --text: rgba(17, 24, 39, 0.92);
+  --muted: rgba(17, 24, 39, 0.64);
+  --muted2: rgba(17, 24, 39, 0.50);
+  /* Accent: violet + amber (not “all blue”) */
+  --accent: #7c3aed;
+  --accent2: #f59e0b;
+  --danger: #ef4444;
+  --shadow: 0 22px 70px rgba(17, 24, 39, 0.12);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+    "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  background: radial-gradient(900px 520px at 20% 0%, rgba(124, 58, 237, 0.10), transparent 55%),
+    radial-gradient(1000px 520px at 90% 10%, rgba(245, 158, 11, 0.08), transparent 60%),
+    linear-gradient(180deg, var(--bg), #f2f4f8);
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+}
+
+.appShell {
+  min-height: 100%;
+}
+
+.agentHeader {
+  padding: 18px 20px 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.85);
+  /* Let cards scroll with the page (not fixed/sticky) */
+  position: static;
+}
+
+.agentHeaderTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.agentHeaderTitle {
+  font-size: 25px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: rgba(17, 24, 39, 0.62);
+  font-weight: bold;
+}
+
+.ghostBtn {
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.70);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.ghostBtn:hover {
+  border-color: var(--border2);
+  background: rgba(255, 255, 255, 0.92);
+}
+.ghostBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.agentCardsRow {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  width: 100%;
+}
+
+@media (min-width: 980px) {
+  .agentCardsRow {
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+  }
+}
+
+.agentCard {
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(255, 255, 255, 0.96));
+  border-radius: 16px;
+  padding: 12px 12px 10px 12px;
+  box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08);
+}
+
+.agentCardTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.agentCardName {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 650;
+}
+
+.agentCardUrl {
+  color: var(--muted2);
+  font-size: 12px;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentCardDesc {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.35;
+  min-height: 34px;
+}
+
+.agentCardSkills {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: rgba(17, 24, 39, 0.04);
+  padding: 6px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: rgba(17, 24, 39, 0.78);
+}
+.chipMuted {
+  color: var(--muted2);
+}
+
+.statusDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+  border: 1px solid rgba(17, 24, 39, 0.16);
+}
+.statusDotOnline {
+  background: #22c55e;
+  border-color: rgba(34, 197, 94, 0.6);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.10);
+}
+.statusDotOffline {
+  background: var(--danger);
+  border-color: rgba(239, 68, 68, 0.65);
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.10);
+}
+.statusDotUnknown {
+  background: rgba(17, 24, 39, 0.18);
+}
+
+.main {
+  padding: 18px 20px 40px 20px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.errorBox {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 77, 109, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 12px;
+  color: rgba(17, 24, 39, 0.92);
+  white-space: pre-wrap;
+}
+
+/* ------------------------------------------------------------------ */
+/* Chat UI */
+/* ------------------------------------------------------------------ */
+
+.chatPanel {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.chatMessages {
+  padding: 18px 18px 10px 18px;
+  /* Use page scroll (not internal scroll) */
+  max-height: none;
+  min-height: 220px;
+  overflow: visible;
+}
+
+.chatRow {
+  display: flex;
+  margin: 10px 0;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.chatRowUser {
+  justify-content: flex-end;
+}
+
+.chatRowAssistant {
+  justify-content: flex-start;
+}
+
+.chatBubble {
+  max-width: min(720px, 92%);
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: rgba(17, 24, 39, 0.03);
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.chatBubbleUser {
+  border-color: rgba(124, 58, 237, 0.35);
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.12), rgba(245, 158, 11, 0.08));
+}
+
+.chatBubbleTyping {
+  color: rgba(17, 24, 39, 0.60);
+}
+
+.chatComposer {
+  display: flex;
+  gap: 10px;
+  padding: 14px;
+  border-top: 1px solid var(--border);
+  background: rgba(17, 24, 39, 0.02);
+  align-items: flex-end;
+}
+
+.chatInput {
+  flex: 1;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: rgba(255, 255, 255, 0.90);
+  color: var(--text);
+  border-radius: 16px;
+  padding: 10px 12px;
+  resize: none;
+  outline: none;
+  line-height: 1.45;
+}
+.chatInput:focus {
+  border-color: rgba(124, 58, 237, 0.55);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.14);
+}
+
+.chatSend {
+  border: 1px solid rgba(124, 58, 237, 0.40);
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.16), rgba(245, 158, 11, 0.10));
+  color: rgba(17, 24, 39, 0.92);
+  border-radius: 16px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.chatSend:hover {
+  transform: translateY(-1px);
+  border-color: rgba(124, 58, 237, 0.55);
+}
+.chatSend:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.chatHint {
+  padding: 0 14px 14px 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chatAvatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: rgba(255, 255, 255, 0.80);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.chatRowUser .chatAvatar {
+  order: 2;
+}
+
+.chatRowUser .chatBubble {
+  order: 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Markdown + Mermaid inside assistant bubbles */
+/* ------------------------------------------------------------------ */
+
+.md {
+  font-size: 14px;
+}
+
+.md :where(h1, h2, h3) {
+  margin: 10px 0 6px 0;
+  line-height: 1.25;
+}
+
+.md h2 {
+  font-size: 15px;
+}
+
+.md p {
+  margin: 8px 0;
+}
+
+.md ul,
+.md ol {
+  margin: 8px 0 8px 18px;
+  padding: 0;
+}
+
+.md li {
+  margin: 4px 0;
+}
+
+.md code {
+  padding: 2px 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: rgba(17, 24, 39, 0.04);
+  font-size: 12.5px;
+}
+
+.md pre {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: rgba(17, 24, 39, 0.03);
+  overflow: auto;
+}
+
+.md pre code {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.mermaidWrap {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: rgba(255, 255, 255, 0.75);
+  overflow: auto;
+}
+
+.mermaidLoading {
+  margin: 8px 0;
+  color: rgba(17, 24, 39, 0.60);
+  font-size: 13px;
+}
+
+.mermaidError {
+  margin: 8px 0;
+  color: rgba(239, 68, 68, 0.95);
+  font-size: 13px;
+}

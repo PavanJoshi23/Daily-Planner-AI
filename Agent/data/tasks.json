@@ -1,0 +1,90 @@
+[
+  {
+    "id": "T001",
+    "key": "t_report",
+    "title": "Draft weekly status report",
+    "priority": "critical",
+    "est_min": 60,
+    "due": "TODAY",
+    "optional": false
+  },
+  {
+    "id": "T002",
+    "key": "t_review",
+    "title": "Code review: PR #482 — auth middleware",
+    "priority": "high",
+    "est_min": 45,
+    "due": "TODAY",
+    "optional": false
+  },
+  {
+    "id": "T003",
+    "key": "t_hotfix",
+    "title": "Investigate prod bug: login timeout on mobile",
+    "priority": "critical",
+    "est_min": 90,
+    "due": "TODAY",
+    "optional": false
+  },
+  {
+    "id": "T004",
+    "key": "t_plan",
+    "title": "Plan sprint work for next 2 days",
+    "priority": "high",
+    "est_min": 40,
+    "due": "TOMORROW",
+    "optional": false
+  },
+  {
+    "id": "T005",
+    "key": "t_docs",
+    "title": "Update API docs for v2 endpoints",
+    "priority": "medium",
+    "est_min": 50,
+    "due": "TOMORROW",
+    "optional": false
+  },
+  {
+    "id": "T006",
+    "key": "t_infra",
+    "title": "Upgrade staging environment to Node 20",
+    "priority": "medium",
+    "est_min": 30,
+    "due": "TOMORROW",
+    "optional": true
+  },
+  {
+    "id": "T007",
+    "key": "t_inbox",
+    "title": "Email triage (inbox zero-ish)",
+    "priority": "low",
+    "est_min": 20,
+    "optional": true
+  },
+  {
+    "id": "T008",
+    "key": "t_onboard",
+    "title": "Review onboarding doc for new hire (Priya)",
+    "priority": "medium",
+    "est_min": 25,
+    "due": "TOMORROW",
+    "optional": false
+  },
+  {
+    "id": "T009",
+    "key": "t_test",
+    "title": "Write unit tests for payment module",
+    "priority": "high",
+    "est_min": 75,
+    "due": "TOMORROW",
+    "optional": false
+  },
+  {
+    "id": "T010",
+    "key": "t_refactor",
+    "title": "Refactor legacy session handler",
+    "priority": "low",
+    "est_min": 60,
+    "optional": true
+  }
+]
