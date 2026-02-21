@@ -2,8 +2,8 @@
   {
     "id": "E001",
     "date": "TODAY",
-    "start": "09:30",
-    "end": "10:00",
+    "start": "14:00",
+    "end": "15:00",
     "title": "Daily Standup",
     "fixed": true
   },

@@ -113,6 +113,15 @@ RULES:
 
 _TOOLS = [get_inbox_emails, get_urgency_context]
 
+# Singleton — built once per process
+_AGENT = None
+
+
+def _get_agent():
+    global _AGENT
+    if _AGENT is None:
+        _AGENT = create_agent(_build_llm(), tools=_TOOLS, system_prompt=_SYSTEM_PROMPT, name="context_agent")
+    return _AGENT
 
 # ---------------------------------------------------------------------------
 # Agent Server
@@ -151,15 +160,11 @@ class ContextAgentServer(A2AServerBase):
     )
 
     def handle_task(self, task: Task, user_message: Message) -> Task:
-        # Extract plain text from the incoming A2A message
         user_text = " ".join(
             getattr(p, "text", "") for p in getattr(user_message, "parts", [])
         ).strip()
 
-        # Build & invoke the LLM agent
-        llm = _build_llm()
-        agent = create_agent(llm, tools=_TOOLS, system_prompt=_SYSTEM_PROMPT, name="context_agent")
-
+        agent = _get_agent()
         result = agent.invoke({"messages": [HumanMessage(content=user_text)]})
         messages = result.get("messages", [])
         last = messages[-1] if messages else None

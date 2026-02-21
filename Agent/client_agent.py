@@ -1,215 +1,227 @@
+"""
+Orchestrator Agent  —  Daily Planner AI
+========================================
+Architecture:
+  Planner Orchestrator  (this file)
+      ├── ask_calendar_agent(instruction)  →  CalendarAgent  :8001
+      ├── ask_tasks_agent(instruction)     →  TasksAgent     :8002
+      └── ask_context_agent(instruction)   →  ContextAgent   :8003
+
+The orchestrator sends natural-language instructions to specialised sub-agents.
+Each sub-agent owns its domain: it decides which of its own tools to call and
+returns a concise answer.  The orchestrator synthesises the answers and plans.
+
+HITL (Human-in-the-Loop):
+  Write instructions are intercepted *before* reaching the sub-agent.
+  LangGraph's interrupt() pauses the graph and asks the user for approval.
+  On approval, the instruction is forwarded; on rejection, nothing changes.
+"""
+
 from __future__ import annotations
 
-import json
+import re
 
 from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import AzureChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command, interrupt
 
 from a2a_client import A2AClient
 from a2a_types import Message
 from config import Config
 
-_CALENDAR_CLIENT = A2AClient("http://localhost:8001")
-_TASKS_CLIENT    = A2AClient("http://localhost:8002")
-_CONTEXT_CLIENT  = A2AClient("http://localhost:8003")
+
+# ---------------------------------------------------------------------------
+# Sub-agent clients  (one per domain)
+# ---------------------------------------------------------------------------
+
+_CALENDAR = A2AClient("http://localhost:8001")
+_TASKS    = A2AClient("http://localhost:8002")
+_CONTEXT  = A2AClient("http://localhost:8003")
+
+# Shared checkpointer  — persists graph state for HITL resume
+_CHECKPOINTER = MemorySaver()
+
+# Singleton agent cache
+_AGENT = None
 
 
 # ---------------------------------------------------------------------------
-# READ tools
+# Write-instruction detection
 # ---------------------------------------------------------------------------
 
-@tool
-def get_calendar_events(day: str) -> str:
-    """
-    Fetch calendar events for a given day (YYYY-MM-DD or 'TODAY').
-    Returns JSON with 'day' and 'events' list.
-    """
-    task = _CALENDAR_CLIENT.send_task(Message.user_text(f"Get calendar events for {day}"))
-    return json.dumps(A2AClient.extract_data(task), ensure_ascii=False)
+_WRITE_PATTERNS = re.compile(
+    r"\b(move|reschedule|update|change|set|mark|bump|escalate|cancel|delete|remove)\b",
+    re.IGNORECASE,
+)
+
+def _is_write(instruction: str) -> bool:
+    """Heuristic: does this instruction modify data?"""
+    return bool(_WRITE_PATTERNS.search(instruction))
 
 
-@tool
-def get_tasks() -> str:
-    """
-    Fetch the full to-do list.
-    Returns JSON with a 'tasks' list.
-    """
-    task = _TASKS_CLIENT.send_task(Message.user_text("Get all my tasks"))
-    return json.dumps(A2AClient.extract_data(task), ensure_ascii=False)
-
-
-@tool
-def get_urgency_context() -> str:
-    """
-    Analyse emails for urgency signals.
-    Returns JSON with 'urgent_task_ids' and 'reasons'.
-    """
-    task = _CONTEXT_CLIENT.send_task(Message.user_text("Analyse emails for urgency"))
-    return json.dumps(A2AClient.extract_data(task), ensure_ascii=False)
-
-
-@tool
-def get_emails() -> str:
-    """
-    Fetch the simulated inbox emails.
-    Returns JSON with an 'emails' list.
-    """
-    task = _CONTEXT_CLIENT.send_task(Message.user_text("Get all emails"))
-    return json.dumps(A2AClient.extract_data(task), ensure_ascii=False)
-
-
-@tool
-def detect_conflicts() -> str:
-    """
-    Detect overlapping/conflicting calendar events.
-    Returns JSON with 'conflict_count' and list of 'conflicts' (each has event_a, event_b).
-    """
-    task = _CALENDAR_CLIENT.send_task(Message.user_text("Detect scheduling conflicts"))
-    return json.dumps(A2AClient.extract_data(task), ensure_ascii=False)
+def _call_agent(client: A2AClient, instruction: str) -> str:
+    """Send instruction to a sub-agent and return its plain-text answer."""
+    task = client.send_task(Message.user_text(instruction))
+    data = A2AClient.extract_data(task) or {}
+    return data.get("answer") or str(task.status.message or "No response.")
 
 
 # ---------------------------------------------------------------------------
-# WRITE tools
+# Delegation tools  (3 tools instead of 8 fine-grained ones)
 # ---------------------------------------------------------------------------
 
 @tool
-def update_calendar_event(event_id: str, new_start: str, new_end: str) -> str:
+def ask_calendar_agent(instruction: str) -> str:
     """
-    Reschedule a calendar event to a new start and end time.
-    Args:
-        event_id:  The event's id field (e.g. 'E001').
-        new_start: New start time in HH:MM format (e.g. '15:00').
-        new_end:   New end time in HH:MM format (e.g. '16:00').
-    Returns JSON confirming the old and new times.
+    Delegate a calendar request to the CalendarAgent.
+
+    CalendarAgent owns: reading events, rescheduling / moving events,
+    detecting and resolving scheduling conflicts.
+
+    Use natural language, e.g.:
+      "Get events for 2026-03-01"
+      "Move event E001 to 15:00–16:00"
+      "Are there any conflicts today?"
+
+    Write actions (move, reschedule, update) require human approval first.
     """
-    msg = f"Update event {event_id} move to {new_start}-{new_end}"
-    task = _CALENDAR_CLIENT.send_task(Message.user_text(msg))
-    return json.dumps(A2AClient.extract_data(task) or {"status": task.status.state}, ensure_ascii=False)
+    if _is_write(instruction):
+        approved = interrupt({
+            "tool": "ask_calendar_agent",
+            "summary": f"CalendarAgent will: **{instruction}**",
+            "args": {"instruction": instruction},
+        })
+        if not approved:
+            return "Action cancelled by user. No calendar changes were made."
+
+    return _call_agent(_CALENDAR, instruction)
 
 
 @tool
-def set_task_priority(task_id: str, priority: str) -> str:
+def ask_tasks_agent(instruction: str) -> str:
     """
-    Change the priority of a task.
-    Args:
-        task_id:  The task's id (e.g. 'T001').
-        priority: One of: low, medium, high, critical.
-    Returns JSON confirming the priority change.
+    Delegate a task-management request to the TasksAgent.
+
+    TasksAgent owns: listing tasks, changing priority,
+    changing due dates / deadlines.
+
+    Use natural language, e.g.:
+      "List all tasks"
+      "Set task T001 to critical priority"
+      "Change T003 due date to TOMORROW"
+
+    Write actions (set, change, update) require human approval first.
     """
-    msg = f"Set task {task_id} to {priority} priority"
-    task = _TASKS_CLIENT.send_task(Message.user_text(msg))
-    return json.dumps(A2AClient.extract_data(task) or {"status": task.status.state}, ensure_ascii=False)
+    if _is_write(instruction):
+        approved = interrupt({
+            "tool": "ask_tasks_agent",
+            "summary": f"TasksAgent will: **{instruction}**",
+            "args": {"instruction": instruction},
+        })
+        if not approved:
+            return "Action cancelled by user. No task changes were made."
+
+    return _call_agent(_TASKS, instruction)
 
 
 @tool
-def set_task_due(task_id: str, due: str) -> str:
+def ask_context_agent(instruction: str) -> str:
     """
-    Change the due date of a task.
-    Args:
-        task_id: The task's id (e.g. 'T001').
-        due: One of TODAY/TOMORROW/EOD or an absolute date YYYY-MM-DD.
-    Returns JSON confirming the due-date change.
+    Delegate a context / email analysis request to the ContextAgent.
+
+    ContextAgent owns: reading inbox emails, detecting urgency signals,
+    surfacing which tasks are referenced by urgent emails.
+
+    Use natural language, e.g.:
+      "Show my inbox"
+      "Are there any urgent emails?"
+      "Which tasks need attention based on emails?"
+
+    This agent is read-only — no approval required.
     """
-    msg = f"Set task {task_id} due to {due}"
-    task = _TASKS_CLIENT.send_task(Message.user_text(msg))
-    return json.dumps(A2AClient.extract_data(task) or {"status": task.status.state}, ensure_ascii=False)
+    return _call_agent(_CONTEXT, instruction)
 
 
 # ---------------------------------------------------------------------------
-# Agent prompt
+# System prompt  — orchestrator level only
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = """You are a Smart Daily Planner assistant. You follow a Plan → Act → Observe loop.
+_SYSTEM_PROMPT = """You are the Daily Planner Orchestrator.
 
-CAPABILITIES:
-- Read calendar, tasks, urgency context.
-- Read inbox emails (get_emails).
-- Detect scheduling conflicts.
-- Reschedule events (update_calendar_event).
-- Change task priorities (set_task_priority).
-- Change task due dates (set_task_due).
+Your job: understand the user's request and delegate to the right specialist agent.
+You do NOT handle data directly — you route and synthesise.
 
-════════════════════════════════════════
-RESPONSE MODE — pick the right one:
-════════════════════════════════════════
+════════════════════════════════════════════════════
+SPECIALIST AGENTS  (use exactly one or more per turn)
+════════════════════════════════════════════════════
 
-## MODE 1 — DIRECT ANSWER
-Use this when the user asks a simple factual question:
-  "What are my tasks?", "What's on my calendar?", "Any urgent emails?"
+  ask_calendar_agent(instruction)
+      → Calendar events, scheduling, conflict detection & resolution
+        Examples: "Get events for TODAY", "Move E001 to 15:00–16:00", "Any conflicts?"
 
-Rules:
-- Call only the tool(s) needed to answer.
-- Reply in plain, concise prose or a short list.
-- NO agenda table. NO "PLAN COMPLETE". NO next-action section.
-- Max 15 lines.
+  ask_tasks_agent(instruction)
+      → To-do list, priorities, due dates
+        Examples: "List all tasks", "Set T001 to critical", "Change T004 due to TOMORROW"
 
-Example for "What are my tasks for today?":
+  ask_context_agent(instruction)
+      → Email inbox, urgency signals
+        Examples: "Show inbox", "Which tasks are flagged urgent by emails?"
 
-  You have **4 tasks** today:
+════════════════════════════════════════════════════
+WRITE ACTIONS & HUMAN-IN-THE-LOOP
+════════════════════════════════════════════════════
+Write actions (move, reschedule, set priority, change due date) are intercepted
+automatically before reaching the sub-agent.  The user will see an approval card.
+If approved, the instruction is forwarded.  If rejected, nothing changes.
+You do NOT need to ask for permission yourself — just call the tool.
 
-  | ID | Title | Priority | Est. | Due |
-  |----|-------|----------|------|-----|
-  | **T001** | Draft weekly status report | 🔴 critical | 60m | TODAY |
-  | **T003** | Investigate prod bug: login timeout | 🔴 critical | 90m | TODAY |
-  | **T002** | Code review: PR #482 | 🟠 high | 45m | TODAY |
-  | **T004** | Plan sprint work | 🟠 high | 40m | TOMORROW |
+════════════════════════════════════════════════════
+RESPONSE MODES — pick the right one
+════════════════════════════════════════════════════
 
-  **T001** and **T003** are flagged urgent by email. Start with **T003** (prod impact).
+MODE 1 — DIRECT ANSWER
+  Use for simple factual questions ("What tasks do I have?").
+  Call the relevant agent, reply concisely. No tables unless helpful. Max 15 lines.
 
-────────────────────────────────────────
+MODE 2 — CHANGE OUTCOME
+  Use after a write action was approved or rejected.
+  Report the sub-agent's result in 2–3 lines.
+    ✅ Approved: "✅ **E001** rescheduled to 15:00–16:00."
+    🚫 Rejected: "🚫 No changes were made."
 
-## MODE 2 — CHANGE CONFIRMATION
-Use when the user asks to change something:
-  "Move E001 to 3pm", "Set T002 to critical"
+MODE 3 — FULL DAILY PLAN
+  Use ONLY when the user explicitly asks to plan / schedule / agenda their day.
+  Call all three agents to gather context, then produce:
 
-Rules:
-- Call the write tool, confirm what changed in 2–3 lines.
-- NO full agenda unless the user also asks to re-plan.
+  ✅ **PLAN COMPLETE**
 
-Example:
-  ✅ **E001** rescheduled: 09:30–10:00 → **15:00–15:30**
-  No new conflicts detected.
+  ### Quick summary
+  - **Calendar**: X meetings, N conflicts
+  - **Top priority**: **T001** (due **TODAY**)
+  - **Changes made**: list / none
 
-────────────────────────────────────────
+  ### Today's agenda
+  HH:MM–HH:MM | **ID**   | Title
+  ...
 
-## MODE 3 — FULL DAILY PLAN
-Use ONLY when the user explicitly asks to plan, schedule, or agenda their day:
-  "Plan my day", "Build my agenda", "Schedule everything"
+  ### Key notes (max 3 bullets)
 
-Use this structure whenever the user asks to plan their day:
-
-✅ **PLAN COMPLETE**
-
-### **Quick summary**
-- **Calendar**: X meeting(s), **N conflicts**
-- **Top priority**: **T001** (due **TODAY**)
-- **Changes made**: none / list changes
-
-### **Today's agenda (09:00–17:00, lunch 12:00–13:00)**
-HH:MM–HH:MM | **ID**   | Title (duration, tag)
-09:30–10:00  | —        | Daily Standup (**fixed**)
-13:00–14:00  | **T001** | Weekly status report (60m, **critical**, due **TODAY**)
-
-### **Key notes (max 3 bullets)**
-- **Why this ordering**: ...
-- **Buffers**: ...
-- **Risk**: ...
-
-### **Next action (pick 1)**
-1) ...
-
-════════════════════════════════════════
-
-GLOBAL RULES (all modes):
-- Bold task IDs (**T001**) and event IDs (**E001**) always.
-- Bold deadlines: **TODAY**, **EOD**, **TOMORROW**.
-- You can list the simulated inbox using the get_emails tool (it reads local emails.json).
-- Never output a section that wasn't asked for.
-- Never add "If you want I can..." follow-up offers unless the user asked an open question.
+════════════════════════════════════════════════════
+GLOBAL RULES
+════════════════════════════════════════════════════
+- Bold IDs: **T001**, **E001**.
+- Bold relative dates: **TODAY**, **TOMORROW**, **EOD**.
+- Never invent data — always call the relevant agent first.
+- Never add unsolicited follow-up offers.
 """
 
+
+# ---------------------------------------------------------------------------
+# LLM factory
+# ---------------------------------------------------------------------------
 
 def _build_llm() -> AzureChatOpenAI:
     Config.validate_azure()
@@ -223,43 +235,179 @@ def _build_llm() -> AzureChatOpenAI:
     )
 
 
-_TOOLS = [
-    get_calendar_events,
-    get_tasks,
-    get_urgency_context,
-    get_emails,
-    detect_conflicts,
-    update_calendar_event,
-    set_task_priority,
-    set_task_due,
-]
+# ---------------------------------------------------------------------------
+# Agent  (singleton — MemorySaver persists HITL state across HTTP requests)
+# ---------------------------------------------------------------------------
+
+_TOOLS = [ask_calendar_agent, ask_tasks_agent, ask_context_agent]
 
 
 def build_orchestrator(verbose: bool = False):
-    for client in (_CALENDAR_CLIENT, _TASKS_CLIENT, _CONTEXT_CLIENT):
+    """Return the (cached) orchestrator LangGraph agent."""
+    global _AGENT
+    if _AGENT is not None:
+        return _AGENT
+
+    # Discover sub-agents on first build
+    for client in (_CALENDAR, _TASKS, _CONTEXT):
         try:
             card = client.fetch_agent_card()
-            print(f"  ✓ Discovered: {card.name} @ {card.url}")
+            print(f"  ✓ {card.name} @ {card.url}")
         except Exception as exc:
-            print(f"  ✗ Warning – could not fetch agent card from {client.base_url}: {exc}")
+            print(f"  ✗ Could not reach {client.base_url}: {exc}")
 
-    llm = _build_llm()
-    return create_agent(
-        llm,
+    _AGENT = create_agent(
+        _build_llm(),
         tools=_TOOLS,
         system_prompt=_SYSTEM_PROMPT,
+        checkpointer=_CHECKPOINTER,
         debug=verbose,
-        name="a2a_daily_planner",
+        name="planner_orchestrator",
     )
+    return _AGENT
 
 
-def run_planner(user_text: str, verbose: bool = False) -> str:
+# ---------------------------------------------------------------------------
+# Tool → agent-card ID mapping  (for activity events)
+# ---------------------------------------------------------------------------
+
+_TOOL_TO_AGENT: dict[str, str] = {
+    "ask_calendar_agent": "calendar",
+    "ask_tasks_agent":    "tasks",
+    "ask_context_agent":  "context",
+}
+
+# ---------------------------------------------------------------------------
+# Public helpers used by planner_agent_server.py
+# ---------------------------------------------------------------------------
+
+from collections.abc import Callable
+
+def _emit(on_event: Callable | None, agent_id: str, status: str) -> None:
+    """Fire an activity event if a listener is registered."""
+    if on_event:
+        on_event({"agent": agent_id, "status": status})
+
+
+def _stream_graph(
+    agent,
+    inputs,
+    config: dict,
+    on_event: Callable | None,
+) -> dict:
+    """
+    Run the LangGraph agent via stream(stream_mode="updates").
+
+    Each chunk is a dict { node_name: state_update }.
+    We inspect node names and tool calls to emit activity events:
+      - "agent" node  → orchestrator LLM is thinking  → emit planner:running
+      - "tools" node  → a delegation tool is executing:
+          ask_calendar_agent → emit calendar:running
+          ask_tasks_agent    → emit tasks:running
+          ask_context_agent  → emit context:running
+
+    Returns the final merged state dict (same shape as invoke()).
+    """
+    _emit(on_event, "planner", "running")
+
+    final: dict = {}
+    for chunk in agent.stream(inputs, config=config, stream_mode="updates"):
+        for node_name, update in chunk.items():
+
+            if node_name == "agent":
+                # LLM reasoning step — orchestrator is thinking
+                _emit(on_event, "planner", "running")
+
+            elif node_name == "tools":
+                # A tool finished — figure out which sub-agent was called
+                for msg in update.get("messages", []):
+                    tool_name = getattr(msg, "name", "") or ""
+                    agent_id = _TOOL_TO_AGENT.get(tool_name)
+                    if agent_id:
+                        _emit(on_event, agent_id, "running")
+
+            # Merge updates so we can read final state after the loop
+            if isinstance(update, dict):
+                for k, v in update.items():
+                    final[k] = v
+
+        # Capture __interrupt__ which lives at the top-level chunk
+        if "__interrupt__" in chunk:
+            final["__interrupt__"] = chunk["__interrupt__"]
+
+    _emit(on_event, "planner", "idle")
+    return final
+
+
+def run_planner(
+    user_text: str,
+    thread_id: str,
+    on_event: Callable | None = None,
+    verbose: bool = False,
+) -> dict:
+    """
+    Send a new user message to the orchestrator for this thread.
+
+    Args:
+        on_event: Optional callback fired with {"agent": str, "status": str}
+                  during execution for real-time activity tracking.
+    Returns:
+        { "reply": str, "hitl": dict | None, "interrupted": bool }
+    """
     agent = build_orchestrator(verbose=verbose)
-    result = agent.invoke({"messages": [HumanMessage(content=user_text)]})
+    config = {"configurable": {"thread_id": thread_id}}
+    result = _stream_graph(
+        agent,
+        {"messages": [HumanMessage(content=user_text)]},
+        config,
+        on_event,
+    )
+    hitl = _extract_hitl(result)
+    return {
+        "reply": _last_ai_reply(result),
+        "hitl": hitl,
+        "interrupted": hitl is not None,
+    }
+
+
+def resume_planner(
+    approved: bool,
+    thread_id: str,
+    on_event: Callable | None = None,
+    verbose: bool = False,
+) -> dict:
+    """
+    Resume an interrupt()-paused graph with the user's approval decision.
+
+    Args:
+        approved:  True → forward instruction to sub-agent. False → cancel.
+        thread_id: Must match the thread that was interrupted.
+        on_event:  Optional activity callback.
+    Returns:
+        { "reply": str, "hitl": dict | None, "interrupted": bool }
+    """
+    agent = build_orchestrator(verbose=verbose)
+    config = {"configurable": {"thread_id": thread_id}}
+    result = _stream_graph(agent, Command(resume=approved), config, on_event)
+    hitl = _extract_hitl(result)
+    return {
+        "reply": _last_ai_reply(result),
+        "hitl": hitl,
+        "interrupted": hitl is not None,
+    }
+
+
+def _extract_hitl(result: dict) -> dict | None:
+    for intr in result.get("__interrupt__", ()):
+        v = getattr(intr, "value", None)
+        if isinstance(v, dict) and "tool" in v:
+            return v
+    return None
+
+
+def _last_ai_reply(result: dict) -> str:
     messages = result.get("messages", [])
-    if not messages:
-        return ""
-    last = messages[-1]
+    last = messages[-1] if messages else None
     if isinstance(last, AIMessage):
         return last.content or ""
-    return str(getattr(last, "content", last))
+    return ""

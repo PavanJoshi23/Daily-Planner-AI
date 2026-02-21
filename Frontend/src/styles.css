@@ -76,10 +76,12 @@ code {
   padding: 8px 10px;
   cursor: pointer;
 }
+
 .ghostBtn:hover {
   border-color: var(--border2);
   background: rgba(255, 255, 255, 0.92);
 }
+
 .ghostBtn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -152,6 +154,7 @@ code {
   font-size: 12px;
   color: rgba(17, 24, 39, 0.78);
 }
+
 .chipMuted {
   color: var(--muted2);
 }
@@ -163,19 +166,78 @@ code {
   display: inline-block;
   border: 1px solid rgba(17, 24, 39, 0.16);
 }
+
 .statusDotOnline {
   background: #22c55e;
   border-color: rgba(34, 197, 94, 0.6);
   box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.10);
 }
+
 .statusDotOffline {
   background: var(--danger);
   border-color: rgba(239, 68, 68, 0.65);
   box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.10);
 }
+
 .statusDotUnknown {
   background: rgba(17, 24, 39, 0.18);
 }
+
+/* ── Running / active state ─────────────────────────────────────────────── */
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.7);
+  }
+
+  70% {
+    box-shadow: 0 0 0 8px rgba(251, 191, 36, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(251, 191, 36, 0);
+  }
+}
+
+@keyframes spin-blink {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Pulsing amber dot for the running agent */
+.statusDotRunning {
+  background: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.7);
+  animation: pulse-ring 1.1s cubic-bezier(0.66, 0, 0, 1) infinite;
+}
+
+/* Glowing amber border on the whole card */
+.agentCardRunning {
+  border: 1.5px solid rgba(251, 191, 36, 0.7) !important;
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.15), 0 4px 20px rgba(245, 158, 11, 0.12) !important;
+  transition: box-shadow 0.2s, border 0.2s;
+}
+
+/* "Running…" badge inside the card header */
+.agentRunningLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: #92400e;
+  background: rgba(251, 191, 36, 0.2);
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  border-radius: 99px;
+  padding: 1px 8px;
+  animation: spin-blink 1.1s ease-in-out infinite;
+  white-space: nowrap;
+}
+
 
 .main {
   padding: 18px 20px 40px 20px;
@@ -268,6 +330,7 @@ code {
   outline: none;
   line-height: 1.45;
 }
+
 .chatInput:focus {
   border-color: rgba(124, 58, 237, 0.55);
   box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.14);
@@ -287,10 +350,12 @@ code {
   align-items: center;
   justify-content: center;
 }
+
 .chatSend:hover {
   transform: translateY(-1px);
   border-color: rgba(124, 58, 237, 0.55);
 }
+
 .chatSend:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -398,4 +463,132 @@ code {
   margin: 8px 0;
   color: rgba(239, 68, 68, 0.95);
   font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ */
+/* HITL Confirmation Card  (LangGraph interrupt() approval UI)         */
+/* ------------------------------------------------------------------ */
+
+.hitlCard {
+  border: 1.5px solid rgba(245, 158, 11, 0.50);
+  background: linear-gradient(135deg, rgba(255, 251, 235, 0.95), rgba(255, 237, 213, 0.80));
+  border-radius: 14px;
+  padding: 14px 16px 12px;
+  max-width: min(680px, 92%);
+  box-shadow: 0 4px 20px rgba(245, 158, 11, 0.12);
+}
+
+.hitlCardDone {
+  border-color: rgba(17, 24, 39, 0.14);
+  background: rgba(17, 24, 39, 0.03);
+  box-shadow: none;
+}
+
+.hitlDoneText {
+  font-size: 14px;
+  color: rgba(17, 24, 39, 0.80);
+  white-space: pre-wrap;
+}
+
+.hitlHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.hitlBell {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.hitlTitle {
+  font-weight: 650;
+  font-size: 14.5px;
+  color: rgba(17, 24, 39, 0.90);
+}
+
+.hitlBadge {
+  margin-left: auto;
+  font-size: 11px;
+  color: rgba(124, 58, 237, 0.80);
+  background: rgba(124, 58, 237, 0.08);
+  border: 1px solid rgba(124, 58, 237, 0.22);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-family: ui-monospace, monospace;
+}
+
+.hitlSummary {
+  font-size: 14px;
+  color: rgba(17, 24, 39, 0.88);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.hitlMeta {
+  font-size: 12px;
+  color: rgba(17, 24, 39, 0.55);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.hitlMetaLabel {
+  font-weight: 600;
+  color: rgba(17, 24, 39, 0.45);
+}
+
+.hitlMetaValue {
+  font-size: 11.5px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: rgba(17, 24, 39, 0.04);
+}
+
+.hitlActions {
+  display: flex;
+  gap: 10px;
+}
+
+.hitlBtn {
+  border-radius: 12px;
+  padding: 8px 18px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 100ms ease, box-shadow 100ms ease, opacity 100ms;
+  border: 1.5px solid transparent;
+}
+
+.hitlBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.hitlBtn:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.hitlBtnApprove {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: #fff;
+  border-color: rgba(22, 163, 74, 0.40);
+}
+
+.hitlBtnReject {
+  background: rgba(255, 255, 255, 0.75);
+  color: rgba(17, 24, 39, 0.80);
+  border-color: rgba(17, 24, 39, 0.20);
+}
+
+.hitlBtnReject:not(:disabled):hover {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: rgba(185, 28, 28, 0.90);
 }

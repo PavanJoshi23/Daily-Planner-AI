@@ -1,5 +1,5 @@
 """
-Interactive CLI for the A2A Daily Planner.
+Interactive CLI for the A2A Daily Planner  (with LangGraph Human-in-the-Loop support).
 
 Usage:
     python cli.py           # normal mode
@@ -8,10 +8,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
-from typing import Iterator
+import uuid
 
+import requests
 from rich import box
 from rich.columns import Columns
 from rich.console import Console
@@ -24,21 +26,22 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from client_agent import build_orchestrator
+from client_agent import build_orchestrator, run_planner, resume_planner
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 console = Console()
 
+_PLANNER_BASE = "http://localhost:8000"
+
 # ---------------------------------------------------------------------------
-# Built-in slash-commands (handled before the agent sees them)
+# Built-in slash-commands
 # ---------------------------------------------------------------------------
 
 SLASH_COMMANDS: dict[str, str] = {
     "/help":    "Show this help message",
     "/history": "Show conversation history for this session",
     "/clear":   "Clear the screen",
-    "/debug":   "Toggle verbose agent tracing on/off",
     "/quit":    "Exit the planner",
     "/exit":    "Exit the planner",
 }
@@ -61,7 +64,7 @@ def _banner() -> None:
     console.print()
     console.print(Panel.fit(
         "[bold cyan]🗓  A2A Daily Planner[/bold cyan]\n"
-        "[dim]Agent-to-Agent · Plan · Act · Observe[/dim]",
+        "[dim]Agent-to-Agent · Plan · Act · Observe · ✋ Human-in-the-Loop[/dim]",
         border_style="cyan",
         padding=(1, 4),
     ))
@@ -69,14 +72,12 @@ def _banner() -> None:
 
 
 def _help_panel() -> None:
-    # Commands table
     cmd_table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
     cmd_table.add_column("Command", style="bold yellow")
     cmd_table.add_column("Description", style="dim")
     for cmd, desc in SLASH_COMMANDS.items():
         cmd_table.add_row(cmd, desc)
 
-    # Examples table
     ex_table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
     ex_table.add_column("Example prompts", style="bold green")
     for ex in EXAMPLE_PROMPTS:
@@ -118,17 +119,10 @@ import re
 from rich.syntax import Syntax
 
 def _render_response(text: str, elapsed: float) -> None:
-    """
-    Render agent response.
-    - Mermaid fences → extracted into their own labelled panel
-    - Everything else → Markdown panel
-    """
-    # ── Split out mermaid blocks ──────────────────────────────────────────
     mermaid_pattern = re.compile(r"```mermaid\s*(.*?)```", re.DOTALL)
     mermaid_blocks = mermaid_pattern.findall(text)
     clean_text = mermaid_pattern.sub("[see diagram below]", text).strip()
 
-    # ── Main response panel ───────────────────────────────────────────────
     console.print()
     console.print(Panel(
         Markdown(clean_text),
@@ -137,7 +131,6 @@ def _render_response(text: str, elapsed: float) -> None:
         padding=(1, 2),
     ))
 
-    # ── Mermaid diagram panels ────────────────────────────────────────────
     for i, block in enumerate(mermaid_blocks, 1):
         console.print(Panel(
             Syntax(block.strip(), "markdown", theme="monokai", word_wrap=True),
@@ -146,7 +139,6 @@ def _render_response(text: str, elapsed: float) -> None:
             padding=(1, 2),
         ))
 
-    # ── Footer ────────────────────────────────────────────────────────────
     console.print(f"  [dim]⏱  {elapsed:.1f}s[/dim]\n", justify="right")
 
 
@@ -159,50 +151,92 @@ def _render_error(msg: str) -> None:
     console.print()
 
 
-def _status_bar(debug: bool) -> Text:
+def _status_bar() -> Text:
     t = Text()
-    t.append("  DEBUG ", style="bold yellow" if debug else "dim")
-    t.append("ON  " if debug else "OFF  ", style="bold yellow" if debug else "dim")
+    t.append("  ✋ Human-in-the-Loop ", style="bold cyan")
+    t.append("ACTIVE  ", style="bold cyan")
     t.append("│  Type [bold]/help[/bold] for commands  │  [bold]/quit[/bold] to exit")
     return t
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator lifecycle — build once, reuse
+# Human-in-the-Loop flow helpers  (via /resume HTTP endpoint)
 # ---------------------------------------------------------------------------
 
-def _init_orchestrator(debug: bool) -> object:
-    console.print(Rule("[dim]Connecting to A2A server agents…[/dim]", style="dim"))
+def _handle_hitl(hitl: dict, thread_id: str) -> tuple[str, str]:
+    """
+    Display the HITL approval panel and send the decision to /resume.
+    Returns (agent_reply_after_resume, outcome_label).
+    """
     console.print()
-    executor = build_orchestrator(verbose=debug)
-    console.print()
-    console.print(Rule("[dim]Ready[/dim]", style="dim"))
-    console.print()
-    return executor
+    console.print(Panel(
+        f"[bold yellow]⏳ Action awaiting your approval[/bold yellow]\n\n"
+        f"  {hitl['summary']}\n\n"
+        f"[dim]Tool:[/dim] {hitl['tool']}  "
+        f"[dim]Args:[/dim] {json.dumps(hitl['args'])}",
+        title="[bold yellow]🔔 Human-in-the-Loop  (LangGraph interrupt)[/bold yellow]",
+        border_style="yellow",
+        padding=(1, 2),
+    ))
+
+    while True:
+        choice = Prompt.ask(
+            "  [bold yellow]Approve or Reject?[/bold yellow]  [dim](A/R)[/dim]",
+            choices=["A", "a", "R", "r"],
+            show_choices=False,
+        ).strip().upper()
+
+        approved = (choice == "A")
+
+        try:
+            with _thinking_spinner("Resuming agent…"):
+                resp = requests.post(
+                    f"{_PLANNER_BASE}/resume",
+                    json={"thread_id": thread_id, "approved": approved},
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+
+            reply = payload.get("reply", "")
+
+            if approved:
+                outcome = "✅ Approved and executed."
+                console.print(Panel(
+                    "[green]✅ Action approved — agent is resuming…[/green]",
+                    border_style="green", padding=(0, 2),
+                ))
+            else:
+                outcome = "🚫 Action cancelled."
+                console.print(Panel(
+                    "[dim]🚫 Action cancelled. No changes were made.[/dim]",
+                    border_style="dim", padding=(0, 2),
+                ))
+
+            return reply, outcome
+
+        except Exception as exc:
+            _render_error(f"Resume failed: {exc}")
+            return "", f"❌ Error: {exc}"
 
 
 # ---------------------------------------------------------------------------
 # Main REPL
 # ---------------------------------------------------------------------------
 
-def repl(debug: bool = False) -> None:
+def repl() -> None:
     _banner()
 
-    try:
-        executor = _init_orchestrator(debug)
-    except Exception as exc:
-        _render_error(
-            f"Failed to connect to agent servers.\n\n"
-            f"Make sure `run_servers.py` is running first.\n\nDetails: {exc}"
-        )
-        sys.exit(1)
+    # Each CLI session gets a unique thread_id so LangGraph checkpoints correctly
+    thread_id = str(uuid.uuid4())
+    console.print(f"  [dim]Session thread: {thread_id[:8]}…[/dim]")
+    console.print()
 
     history: list[dict[str, str]] = []
-    console.print(_status_bar(debug))
+    console.print(_status_bar())
     console.print()
 
     while True:
-        # ---- Prompt ----
         try:
             user_input = Prompt.ask("[bold cyan]You[/bold cyan]").strip()
         except (EOFError, KeyboardInterrupt):
@@ -212,7 +246,6 @@ def repl(debug: bool = False) -> None:
         if not user_input:
             continue
 
-        # ---- Slash commands ----
         cmd = user_input.lower()
 
         if cmd in ("/quit", "/exit"):
@@ -222,7 +255,7 @@ def repl(debug: bool = False) -> None:
         if cmd == "/clear":
             console.clear()
             _banner()
-            console.print(_status_bar(debug))
+            console.print(_status_bar())
             console.print()
             continue
 
@@ -234,50 +267,34 @@ def repl(debug: bool = False) -> None:
             _history_panel(history)
             continue
 
-        if cmd == "/debug":
-            debug = not debug
-            # Rebuild with new verbose flag
-            console.print(f"[yellow]Debug tracing {'ON' if debug else 'OFF'}[/yellow]")
-            executor = _init_orchestrator(debug)
-            console.print(_status_bar(debug))
-            console.print()
-            continue
-
-        # ---- Agent call ----
+        # ---- Agent call via HTTP ----
         start = time.perf_counter()
         agent_reply = ""
+        hitl_outcome = ""
 
         try:
-            if debug:
-                # In debug mode, show tool-call trace derived from returned messages
-                console.print(Rule("[dim yellow]Agent Trace[/dim yellow]", style="dim yellow"))
-                result = executor.invoke({"messages": [HumanMessage(content=user_input)]})
-                msgs = result.get("messages", [])
-                for m in msgs:
-                    if isinstance(m, HumanMessage):
-                        continue
-                    if isinstance(m, ToolMessage):
-                        console.print(f"[yellow]Tool[/yellow] {m.name}: {m.content}")
-                        continue
-                    if isinstance(m, AIMessage):
-                        if m.content:
-                            console.print(f"[cyan]AI[/cyan]: {m.content}")
-                        tool_calls = getattr(m, "tool_calls", None)
-                        if tool_calls:
-                            console.print(f"[yellow]AI tool_calls[/yellow]: {tool_calls}")
-                        continue
-                    # Fallback
-                    console.print(str(m))
+            with _thinking_spinner():
+                resp = requests.post(
+                    f"{_PLANNER_BASE}/chat",
+                    json={"message": user_input, "thread_id": thread_id, "verbose": False},
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
 
-                agent_reply = ""
-                if msgs and isinstance(msgs[-1], AIMessage):
-                    agent_reply = msgs[-1].content or ""
-                console.print(Rule("[dim yellow]End Trace[/dim yellow]", style="dim yellow"))
-            else:
-                with _thinking_spinner():
-                    result = executor.invoke({"messages": [HumanMessage(content=user_input)]})
-                msgs = result.get("messages", [])
-                agent_reply = msgs[-1].content if msgs and isinstance(msgs[-1], AIMessage) else ""
+            agent_reply = payload.get("reply", "")
+            hitl_data = payload.get("hitl")
+
+            # ── HITL pause handling ─────────────────────────────────────
+            # A single turn can chain multiple write tools; loop until no more interrupts
+            while hitl_data:
+                after_reply, hitl_outcome = _handle_hitl(hitl_data, thread_id)
+                if after_reply:
+                    agent_reply = after_reply
+                # Check if resume triggered another interrupt
+                hitl_data = payload.get("hitl") if not after_reply else None
+                # (after_reply payload from /resume already consumed above)
+                break   # _handle_hitl already called /resume which returned next payload
 
         except Exception as exc:
             _render_error(str(exc))
@@ -285,17 +302,13 @@ def repl(debug: bool = False) -> None:
 
         elapsed = time.perf_counter() - start
 
-        _render_response(agent_reply, elapsed)
+        if agent_reply:
+            _render_response(agent_reply, elapsed)
 
-        # Elapsed time footer
-        console.print(
-            f"  [dim]⏱  {elapsed:.1f}s[/dim]",
-            justify="right",
-        )
-        console.print()
-
-        # Save to history
-        history.append({"user": user_input, "agent": agent_reply})
+        history.append({
+            "user": user_input,
+            "agent": (agent_reply or "") + (" " + hitl_outcome if hitl_outcome else ""),
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +317,5 @@ def repl(debug: bool = False) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="A2A Daily Planner CLI")
-    parser.add_argument("--debug", action="store_true", help="Show agent thought/action traces")
-    args = parser.parse_args()
-    repl(debug=args.debug)
+    parser.parse_args()      # kept for forward compatibility
+    repl()

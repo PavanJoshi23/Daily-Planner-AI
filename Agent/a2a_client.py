@@ -21,7 +21,7 @@ from a2a_types import (
 
 
 class A2AClient:
-    def __init__(self, agent_url: str, timeout: float = 30.0) -> None:
+    def __init__(self, agent_url: str, timeout: float = 120.0) -> None:
         self.base_url = agent_url.rstrip("/")
         self.timeout = timeout
         self._card: AgentCard | None = None

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -151,6 +150,15 @@ RULES:
 
 _TOOLS = [get_calendar_events, update_event_timing, detect_conflicts]
 
+# Singleton — built once per process to avoid redundant LLM client creation
+_AGENT = None
+
+
+def _get_agent():
+    global _AGENT
+    if _AGENT is None:
+        _AGENT = create_agent(_build_llm(), tools=_TOOLS, system_prompt=_SYSTEM_PROMPT, name="calendar_agent")
+    return _AGENT
 
 # ---------------------------------------------------------------------------
 # Agent Server
@@ -192,15 +200,11 @@ class CalendarAgentServer(A2AServerBase):
     )
 
     def handle_task(self, task: Task, user_message: Message) -> Task:
-        # Extract plain text from the incoming A2A message
         user_text = " ".join(
             p.text for p in user_message.parts if isinstance(p, TextPart)
         ).strip()
 
-        # Build & invoke the LLM agent
-        llm = _build_llm()
-        agent = create_agent(llm, tools=_TOOLS, system_prompt=_SYSTEM_PROMPT, name="calendar_agent")
-
+        agent = _get_agent()
         result = agent.invoke({"messages": [HumanMessage(content=user_text)]})
         messages = result.get("messages", [])
         last = messages[-1] if messages else None
